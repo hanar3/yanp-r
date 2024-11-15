@@ -88,8 +88,9 @@ enum Literal {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
+#[serde(tag = "type", content = "expression")]
 enum Statement {
+    #[serde(rename = "ExpressionStatement")]
     Literal(Literal),
 }
 
@@ -189,7 +190,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"NumericLiteral\",\"value\":42}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}}]}"
         );
     }
 
@@ -200,7 +201,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"StringLiteral\",\"value\":\"hello\"}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}"
         );
     }
 
@@ -211,7 +212,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
         );
     }
 
@@ -222,7 +223,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
         );
     }
 }
