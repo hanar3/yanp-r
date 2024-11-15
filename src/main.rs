@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 enum TokenType {
     Number,
     String,
+    Semicolon,
     Skip,
 }
 
@@ -24,7 +25,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 4] = [
+    const SPEC: [(&'static str, TokenType); 5] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -32,6 +33,8 @@ impl Tokenizer {
         // Strings:
         (r#"^"[^"]*""#, TokenType::String), // double quote
         (r#"^'[^']*'"#, TokenType::String), // Single quote
+        // Symbols, delimiters
+        (r"^;", TokenType::Semicolon),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -88,17 +91,23 @@ enum Literal {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "type", content = "expression")]
-enum Statement {
-    #[serde(rename = "ExpressionStatement")]
+#[serde(untagged)]
+enum Expression {
     Literal(Literal),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExpressionStatement {
+    #[serde(rename = "type")]
+    _type: &'static str,
+    expression: Expression,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Program {
     #[serde(rename = "type")]
     ptype: &'static str,
-    body: Vec<Statement>,
+    body: Vec<ExpressionStatement>,
 }
 
 #[allow(dead_code)]
@@ -125,7 +134,7 @@ impl Parser {
         };
     }
 
-    pub fn statement_list(&mut self) -> Vec<Statement> {
+    pub fn statement_list(&mut self) -> Vec<ExpressionStatement> {
         let mut statement_list = vec![self.statement()];
 
         while !self.lookahead.is_none() {
@@ -135,15 +144,39 @@ impl Parser {
         return statement_list;
     }
 
-    pub fn statement(&mut self) -> Statement {
-        if let Some(ref tok) = self.lookahead {
-            match tok.ttype {
-                TokenType::Number => Statement::Literal(self.numeric_literal()),
-                TokenType::String => Statement::Literal(self.string_literal()),
-                _ => panic!("Unexpected token"),
-            }
+    pub fn statement(&mut self) -> ExpressionStatement {
+        if let Some(_) = self.lookahead {
+            return self.expression_statement();
         } else {
             panic!("Unexpected end of input parsing statement");
+        }
+    }
+
+    /*
+     * ExpressionStatement
+     *   : Expression ';'
+     *   ;
+     * */
+    pub fn expression_statement(&mut self) -> ExpressionStatement {
+        let expression = self.expression();
+        self.eat(TokenType::Semicolon);
+        ExpressionStatement {
+            _type: "ExpressionStatement",
+            expression,
+        }
+    }
+
+    /*
+     * Expression
+     *   : Literal
+     *   ;
+     * */
+    pub fn expression(&mut self) -> Expression {
+        let la = self.lookahead.clone().unwrap(); // TODO: should not clone!
+        match la.ttype {
+            TokenType::Number => Expression::Literal(self.numeric_literal()),
+            TokenType::String => Expression::Literal(self.string_literal()),
+            _ => panic!("Unexpected token type: {:?}", la.ttype),
         }
     }
 
@@ -185,7 +218,7 @@ mod tests {
 
     #[test]
     fn parses_a_numeric_literal() {
-        let mut parser = Parser::init("42");
+        let mut parser = Parser::init("42;");
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
@@ -196,7 +229,7 @@ mod tests {
 
     #[test]
     fn parses_a_string_literal() {
-        let mut parser = Parser::init(r#""hello""#);
+        let mut parser = Parser::init(r#""hello";"#);
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
@@ -207,7 +240,7 @@ mod tests {
 
     #[test]
     fn parses_a_singlequote_string_literal() {
-        let mut parser = Parser::init(r#"'hello-single'"#);
+        let mut parser = Parser::init(r#"'hello-single';"#);
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
@@ -218,7 +251,7 @@ mod tests {
 
     #[test]
     fn skips_spaces() {
-        let mut parser = Parser::init(r#"    'hello-single'    "#);
+        let mut parser = Parser::init(r#"    'hello-single';    "#);
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
