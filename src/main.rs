@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 enum TokenType {
     Number,
     String,
+    Skip,
 }
 
 #[derive(Debug, Clone)]
@@ -23,7 +24,9 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 3] = [
+    const SPEC: [(&'static str, TokenType); 4] = [
+        // Whitespaces
+        (r"^\s+", TokenType::Skip),
         // Numbers:
         (r"^\d+", TokenType::Number),
         // Strings:
@@ -37,20 +40,36 @@ impl Tokenizer {
         Self { str, cursor: 0 }
     }
 
+    pub fn has_more_tokens(&self) -> bool {
+        return self.cursor < self.str.len();
+    }
+
     pub fn next(&mut self) -> Option<Token> {
+        if !self.has_more_tokens() {
+            return None;
+        }
+
         let string = &self.str[(self.cursor as usize)..];
 
         for (_, spec) in Self::SPEC.iter().enumerate() {
             let regex = Regex::new(spec.0).expect("Invalid regex pattern");
+
             if let Some(captures) = regex.captures(string) {
-                let cap = captures
-                    .get(0)
-                    .expect("Failed to extract number from regex");
-                self.cursor += cap.len();
-                return Some(Token {
-                    ttype: spec.1.clone(),
-                    value: cap.as_str().to_string(),
-                });
+                match spec.1 {
+                    TokenType::Skip => {
+                        let cap = captures.get(0).expect("Failed to extract value from regex");
+                        self.cursor += cap.len();
+                        return self.next();
+                    }
+                    _ => {
+                        let cap = captures.get(0).expect("Failed to extract value from regex");
+                        self.cursor += cap.len();
+                        return Some(Token {
+                            ttype: spec.1.clone(),
+                            value: cap.as_str().to_string(),
+                        });
+                    }
+                }
             }
         }
 
@@ -108,7 +127,7 @@ impl Parser {
     pub fn statement_list(&mut self) -> Vec<Statement> {
         let mut statement_list = vec![self.statement()];
 
-        while let Some(_) = self.lookahead {
+        while !self.lookahead.is_none() {
             statement_list.push(self.statement());
         }
 
@@ -120,9 +139,10 @@ impl Parser {
             match tok.ttype {
                 TokenType::Number => Statement::Literal(self.numeric_literal()),
                 TokenType::String => Statement::Literal(self.string_literal()),
+                _ => panic!("Unexpected token"),
             }
         } else {
-            panic!("Unexpected end of input");
+            panic!("Unexpected end of input parsing statement");
         }
     }
 
@@ -187,6 +207,17 @@ mod tests {
     #[test]
     fn parses_a_singlequote_string_literal() {
         let mut parser = Parser::init(r#"'hello-single'"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}]}"
+        );
+    }
+
+    #[test]
+    fn skips_spaces() {
+        let mut parser = Parser::init(r#"    'hello-single'    "#);
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
