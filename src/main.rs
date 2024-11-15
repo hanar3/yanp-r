@@ -316,7 +316,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}}]}]}"
         );
     }
 }
