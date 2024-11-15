@@ -7,6 +7,8 @@ enum TokenType {
     Number,
     String,
     Semicolon,
+    OpenCurly,
+    CloseCurly,
     Skip,
 }
 
@@ -23,7 +25,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 5] = [
+    const SPEC: [(&'static str, TokenType); 7] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -33,6 +35,8 @@ impl Tokenizer {
         (r#"^'[^']*'"#, TokenType::String), // Single quote
         // Symbols, delimiters
         (r"^;", TokenType::Semicolon),
+        (r"^\{", TokenType::OpenCurly),
+        (r"^\}", TokenType::CloseCurly),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -94,15 +98,29 @@ enum Expression {
 #[derive(Debug, Serialize, Deserialize)]
 struct ExpressionStatement {
     #[serde(rename = "type")]
-    _type: &'static str,
+    _type: String,
     expression: Expression,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+enum Statement {
+    Expression(ExpressionStatement),
+    Block(BlockStatement),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BlockStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    body: Vec<Statement>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Program {
     #[serde(rename = "type")]
     ptype: &'static str,
-    body: Vec<ExpressionStatement>,
+    body: Vec<Statement>,
 }
 
 #[allow(dead_code)]
@@ -125,23 +143,33 @@ impl Parser {
     pub fn parse(&mut self) -> Program {
         return Program {
             ptype: "Program",
-            body: self.statement_list(),
+            body: self.statement_list(None),
         };
     }
 
-    pub fn statement_list(&mut self) -> Vec<ExpressionStatement> {
+    pub fn statement_list(&mut self, stop_lookahead: Option<TokenType>) -> Vec<Statement> {
         let mut statement_list = vec![self.statement()];
 
-        while !self.lookahead.is_none() {
-            statement_list.push(self.statement());
+        while let Some(ref tok) = self.lookahead {
+            if let Some(ref stop_ttype) = stop_lookahead {
+                // Pause when we find the stop lookahead?
+                if *stop_ttype == tok.ttype {
+                    break;
+                }
+            } else {
+                statement_list.push(self.statement());
+            }
         }
 
         return statement_list;
     }
 
-    pub fn statement(&mut self) -> ExpressionStatement {
-        if let Some(_) = self.lookahead {
-            return self.expression_statement();
+    pub fn statement(&mut self) -> Statement {
+        if let Some(ref tok) = self.lookahead {
+            match tok.ttype {
+                TokenType::OpenCurly => Statement::Block(self.block_statement()),
+                _ => Statement::Expression(self.expression_statement()),
+            }
         } else {
             panic!("Unexpected end of input parsing statement");
         }
@@ -156,8 +184,28 @@ impl Parser {
         let expression = self.expression();
         self.eat(TokenType::Semicolon);
         ExpressionStatement {
-            _type: "ExpressionStatement",
+            _type: "ExpressionStatement".into(),
             expression,
+        }
+    }
+
+    pub fn block_statement(&mut self) -> BlockStatement {
+        self.eat(TokenType::OpenCurly);
+        if let Some(ref tok) = self.lookahead {
+            let body = match tok.ttype {
+                TokenType::CloseCurly => {
+                    vec![] // Empty block
+                }
+                _ => self.statement_list(Some(TokenType::CloseCurly)),
+            };
+            self.eat(TokenType::CloseCurly);
+
+            return BlockStatement {
+                _type: "BlockStatement".into(),
+                body,
+            };
+        } else {
+            panic!("Unexpected end of input parsing block statement");
         }
     }
 
@@ -247,6 +295,23 @@ mod tests {
     #[test]
     fn skips_spaces() {
         let mut parser = Parser::init(r#"    'hello-single';    "#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
+        );
+    }
+
+    #[test]
+    fn parses_block_statement() {
+        let mut parser = Parser::init(
+            r#"
+            {
+                42;
+            }
+        "#,
+        );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
