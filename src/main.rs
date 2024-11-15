@@ -156,9 +156,8 @@ impl Parser {
                 if *stop_ttype == tok.ttype {
                     break;
                 }
-            } else {
-                statement_list.push(self.statement());
             }
+            statement_list.push(self.statement());
         }
 
         return statement_list;
@@ -309,6 +308,7 @@ mod tests {
             r#"
             {
                 42;
+                "hello";
             }
         "#,
         );
@@ -316,7 +316,8 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}}]}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+
         );
     }
 }
