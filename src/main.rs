@@ -1,6 +1,4 @@
 #[allow(unused)]
-#[cfg(test)]
-extern crate assert_matches;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -37,9 +35,6 @@ impl Tokenizer {
         (r"^;", TokenType::Semicolon),
     ];
     pub fn new(str: &'static str) -> Self {
-        Self { str, cursor: 0 }
-    }
-    pub fn init(str: &'static str) -> Self {
         Self { str, cursor: 0 }
     }
 
