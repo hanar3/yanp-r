@@ -1,4 +1,4 @@
-#[allow(unused)]
+#![allow(unused)]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
