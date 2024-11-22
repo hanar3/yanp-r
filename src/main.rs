@@ -25,7 +25,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 7] = [
+    const SPEC: [(&'static str, TokenType); 9] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -33,6 +33,9 @@ impl Tokenizer {
         // Strings:
         (r#"^"[^"]*""#, TokenType::String), // double quote
         (r#"^'[^']*'"#, TokenType::String), // Single quote
+        // Comments
+        (r"^\/\/.*", TokenType::Skip),           // Single-line
+        (r"^\/\*[\s\S]*?\*\/", TokenType::Skip), // Multi-line
         // Symbols, delimiters
         (r"^;", TokenType::Semicolon),
         (r"^\{", TokenType::OpenCurly),
@@ -301,11 +304,53 @@ mod tests {
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
         );
     }
-
     #[test]
     fn parses_block_statement() {
         let mut parser = Parser::init(
             r#"
+            {
+                42;
+                "hello";
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+
+        );
+    }
+    #[test]
+    fn skips_single_line_comments() {
+        let mut parser = Parser::init(
+            r#"
+            // Hello world!
+            {
+                42;
+                "hello";
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+
+        );
+    }
+
+    #[test]
+    fn skips_multiline_comments() {
+        let mut parser = Parser::init(
+            r#"
+            /*
+             * Hello
+             * This is a doc
+             * 
+             * */
             {
                 42;
                 "hello";
