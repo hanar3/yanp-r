@@ -1,4 +1,7 @@
 #![allow(unused)]
+use core::fmt;
+use std::fmt::write;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +13,13 @@ enum TokenType {
     OpenCurly,
     CloseCurly,
     Skip,
+    AdditiveOp,
+}
+
+impl fmt::Display for TokenType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +35,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 9] = [
+    const SPEC: [(&'static str, TokenType); 10] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -40,6 +50,8 @@ impl Tokenizer {
         (r"^;", TokenType::Semicolon),
         (r"^\{", TokenType::OpenCurly),
         (r"^\}", TokenType::CloseCurly),
+        // Math operators
+        (r"^[+\-]", TokenType::AdditiveOp),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -82,7 +94,7 @@ impl Tokenizer {
     }
 }
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "value")]
 enum Literal {
     #[serde(rename = "StringLiteral")]
@@ -92,10 +104,27 @@ enum Literal {
     Number(i32),
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+enum BinaryExpressionNode {
+    Literal(Literal),
+    Binary(Box<BinaryExpr>),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BinaryExpr {
+    #[serde(rename = "type")]
+    _type: String,
+    operator: String,
+    left: BinaryExpressionNode,
+    right: BinaryExpressionNode,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum Expression {
     Literal(Literal),
+    Binary(BinaryExpr),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -218,10 +247,58 @@ impl Parser {
      * */
     pub fn expression(&mut self) -> Expression {
         let la = self.lookahead.clone().unwrap(); // TODO: should not clone!
+        self.additive_expression()
+    }
+
+    pub fn additive_expression(&mut self) -> Expression {
+        let lookahead = self.peek();
+        let mut left = self.literal();
+        let mut expr: Expression = Expression::Literal(left.clone());
+
+        // ugh...
+        while (self.lookahead.as_ref().unwrap().ttype.to_string()
+            == TokenType::AdditiveOp.to_string())
+        {
+            println!("{left:?}, {lookahead:?}");
+            let operator = self.eat(TokenType::AdditiveOp);
+            let right = self.additive_expression();
+            match right {
+                Expression::Binary(right_expr) => {
+                    expr = Expression::Binary(BinaryExpr {
+                        _type: "BinaryExpression".into(),
+                        operator: "+".into(),
+                        left: BinaryExpressionNode::Literal(left.clone()),
+                        right: BinaryExpressionNode::Binary(Box::new(right_expr)),
+                    });
+                }
+                Expression::Literal(lit) => {
+                    expr = Expression::Binary(BinaryExpr {
+                        _type: "BinaryExpression".into(),
+                        operator: "+".into(),
+                        left: BinaryExpressionNode::Literal(left.clone()),
+                        right: BinaryExpressionNode::Literal(lit),
+                    });
+                }
+            };
+        }
+
+        return expr;
+    }
+
+    pub fn peek(&mut self) -> Token {
+        return self.lookahead.clone().expect("Unexpected end of input");
+    }
+
+    // TODO: there's a better way to do this...
+    pub fn literal(&mut self) -> Literal {
+        let la = self
+            .lookahead
+            .clone()
+            .expect("Unexpected end of input while trying to parse literal");
         match la.ttype {
-            TokenType::Number => Expression::Literal(self.numeric_literal()),
-            TokenType::String => Expression::Literal(self.string_literal()),
-            _ => panic!("Unexpected token type: {:?}", la.ttype),
+            TokenType::Number => self.numeric_literal(),
+            TokenType::String => self.string_literal(),
+            _ => panic!("Unexpected token: {:?}", la.ttype),
         }
     }
 
@@ -355,6 +432,21 @@ mod tests {
                 42;
                 "hello";
             }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+
+        );
+    }
+    #[test]
+    fn parses_a_simple_sum_expression() {
+        let mut parser = Parser::init(
+            r#"
+                42 + 41;
         "#,
         );
         let ast = parser.parse();
