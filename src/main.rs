@@ -251,15 +251,12 @@ impl Parser {
     }
 
     pub fn additive_expression(&mut self) -> Expression {
-        let lookahead = self.peek();
         let mut left = self.literal();
         let mut expr: Expression = Expression::Literal(left.clone());
 
-        // ugh...
         while (self.lookahead.as_ref().unwrap().ttype.to_string()
             == TokenType::AdditiveOp.to_string())
         {
-            println!("{left:?}, {lookahead:?}");
             let operator = self.eat(TokenType::AdditiveOp);
             let right = self.additive_expression();
             match right {
@@ -283,10 +280,6 @@ impl Parser {
         }
 
         return expr;
-    }
-
-    pub fn peek(&mut self) -> Token {
-        return self.lookahead.clone().expect("Unexpected end of input");
     }
 
     // TODO: there's a better way to do this...
