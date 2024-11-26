@@ -1,4 +1,5 @@
 #![allow(unused)]
+
 use core::fmt;
 use std::fmt::write;
 
@@ -17,6 +18,8 @@ enum TokenType {
     Skip,
     AdditiveOp,
     MultiplicativeOp,
+    Identifier,
+    SimpleAssign,
 }
 
 impl fmt::Display for TokenType {
@@ -38,7 +41,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 13] = [
+    const SPEC: [(&'static str, TokenType); 15] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -58,6 +61,10 @@ impl Tokenizer {
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
         (r"^[*\/]", TokenType::MultiplicativeOp),
+        // Identifier
+        (r"^\w+", TokenType::Identifier),
+        // Assignment Operators
+        (r"^=", TokenType::SimpleAssign),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -110,6 +117,13 @@ enum Literal {
     Number(i32),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Identifier {
+    #[serde(rename = "type")]
+    _type: String,
+    name: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 enum BinaryExpressionNode {
@@ -126,11 +140,22 @@ struct BinaryExpr {
     right: Box<Expression>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AssignmentExpression {
+    #[serde(rename = "type")]
+    _type: String,
+    operator: String,
+    left: Box<Expression>,
+    right: Box<Expression>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 enum Expression {
     Literal(Literal),
     Binary(BinaryExpr),
+    AssignmentExpression(AssignmentExpression),
+    LeftHandSideExpression(Identifier),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +276,44 @@ impl Parser {
     }
 
     pub fn expression(&mut self) -> Expression {
-        self.additive_expression()
+        self.assignment_expression()
+    }
+
+    pub fn is_assignment_operator(&mut self, lookahead: &Token) -> bool {
+        match lookahead.ttype {
+            TokenType::SimpleAssign => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_valid_left(&mut self, left: &Expression) -> bool {
+        match left {
+            Expression::LeftHandSideExpression(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn assignment_expression(&mut self) -> Expression {
+        let left = self.additive_expression();
+
+        if !self.is_assignment_operator(&self.lookahead().clone()) {
+            return left;
+        }
+
+        if !self.is_valid_left(&left) {
+            panic!("Expected LeftHandSideExpression but got {:?}", left);
+        }
+
+        return Expression::AssignmentExpression(AssignmentExpression {
+            _type: "AssignmentExpression".into(),
+            operator: self.assignment_operator().value,
+            left: Box::new(left),
+            right: Box::new(self.assignment_expression()),
+        });
+    }
+
+    pub fn assignment_operator(&mut self) -> Token {
+        return self.eat(TokenType::SimpleAssign);
     }
 
     pub fn is_literal(&self, token_type: String) -> bool {
@@ -268,8 +330,19 @@ impl Parser {
         match lookahead.ttype {
             TokenType::String | TokenType::Number => Expression::Literal(self.literal()),
             TokenType::OpenParen => self.parse_parenthesized_expression(),
-            _ => panic!("Unhandled primary expression {:?}", lookahead),
+            _ => self.left_hand_side_expression(),
         }
+    }
+
+    pub fn left_hand_side_expression(&mut self) -> Expression {
+        return Expression::LeftHandSideExpression(self.identifier());
+    }
+
+    pub fn identifier(&mut self) -> Identifier {
+        return Identifier {
+            _type: "Identifier".into(),
+            name: self.eat(TokenType::Identifier).value,
+        };
     }
 
     pub fn multiplicative_expression(&mut self) -> Expression {
@@ -549,6 +622,54 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+        );
+    }
+
+    #[test]
+    fn parses_an_assignment() {
+        let mut parser = Parser::init(
+            r#"
+                x = 3;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}]}"
+
+        );
+    }
+
+    #[test]
+    fn parses_chained_variable_assignment() {
+        let mut parser = Parser::init(
+            r#"
+                x = y = 3;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+
+        );
+    }
+
+    #[test]
+    pub fn parses_variable_assignment_with_binary_expressions() {
+        let mut parser = Parser::init(
+            r#"
+                x = y + 3;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+
         );
     }
 }
