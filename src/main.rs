@@ -20,6 +20,8 @@ enum TokenType {
     MultiplicativeOp,
     Identifier,
     SimpleAssign,
+    Comma,
+    Let,
 }
 
 impl fmt::Display for TokenType {
@@ -41,7 +43,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 15] = [
+    const SPEC: [(&'static str, TokenType); 17] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -58,6 +60,9 @@ impl Tokenizer {
         (r"^\}", TokenType::CloseCurly),
         (r"^\(", TokenType::OpenParen),
         (r"^\)", TokenType::CloseParen),
+        (r"^\,", TokenType::Comma),
+        // Keywords
+        (r"^\blet\b", TokenType::Let),
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
         (r"^[*\/]", TokenType::MultiplicativeOp),
@@ -165,11 +170,27 @@ struct ExpressionStatement {
     expression: Expression,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct VariableDeclarationStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    declarations: Vec<VariableDeclarator>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct VariableDeclarator {
+    #[serde(rename = "type")]
+    _type: String,
+    id: Identifier,
+    init: Option<Expression>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum Statement {
     Expression(ExpressionStatement),
     Block(BlockStatement),
+    VariableDecl(VariableDeclarationStatement),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -230,11 +251,60 @@ impl Parser {
         if let Some(ref tok) = self.lookahead {
             match tok.ttype {
                 TokenType::OpenCurly => Statement::Block(self.block_statement()),
+                TokenType::Let => Statement::VariableDecl(self.variable_declaration_statement()),
                 _ => Statement::Expression(self.expression_statement()),
             }
         } else {
             panic!("Unexpected end of input parsing statement");
         }
+    }
+
+    pub fn variable_declaration_statement(&mut self) -> VariableDeclarationStatement {
+        self.eat(TokenType::Let);
+        let statement = VariableDeclarationStatement {
+            _type: "VariableDeclaration".into(),
+            declarations: self.variable_declaration_list(),
+        };
+
+        self.eat(TokenType::Semicolon);
+        return statement;
+    }
+
+    pub fn variable_declaration_list(&mut self) -> Vec<VariableDeclarator> {
+        let mut declarations = vec![];
+        loop {
+            declarations.push(self.variable_declaration());
+
+            if self.lookahead().ttype.to_string() != TokenType::Comma.to_string() {
+                break;
+            }
+
+            self.eat(TokenType::Comma);
+        }
+        return declarations;
+    }
+
+    pub fn variable_declaration(&mut self) -> VariableDeclarator {
+        let id = self.identifier();
+
+        let init = if self.lookahead().ttype.to_string() != TokenType::Comma.to_string()
+            && self.lookahead().ttype.to_string() != TokenType::Semicolon.to_string()
+        {
+            Some(self.variable_initializer())
+        } else {
+            None
+        };
+
+        VariableDeclarator {
+            _type: "VariableDeclarator".into(),
+            id,
+            init,
+        }
+    }
+
+    pub fn variable_initializer(&mut self) -> Expression {
+        self.eat(TokenType::SimpleAssign);
+        return self.assignment_expression();
     }
 
     /*
@@ -669,6 +739,68 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+
+        );
+    }
+
+    #[test]
+    pub fn parses_variable_declaration() {
+        let mut parser = Parser::init(
+            r#"
+                let x;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"x\"},\"init\":null}]}]}"
+
+        );
+    }
+
+    #[test]
+    pub fn parses_a_variable_declaration_with_assignment() {
+        let mut parser = Parser::init(
+            r#"
+                let x = 42;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"x\"},\"init\":{\"type\":\"NumericLiteral\",\"value\":42}}]}]}"
+
+        );
+    }
+    #[test]
+    pub fn parses_multiple_variable_declarations() {
+        let mut parser = Parser::init(
+            r#"
+                let x, y, z;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"x\"},\"init\":null},{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"y\"},\"init\":null},{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"z\"},\"init\":null}]}]}"
+
+        );
+    }
+    #[test]
+    pub fn parses_chained_assignment_inside_variable_decl() {
+        let mut parser = Parser::init(
+            r#"
+                let foo = bar = 10;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"init\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"bar\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}}}]}]}"
 
         );
     }
