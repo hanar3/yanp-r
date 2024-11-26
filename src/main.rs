@@ -338,7 +338,7 @@ impl Parser {
 
     pub fn eat(&mut self, ttype: TokenType) -> Token {
         let lookahead = self
-            .lookahead()
+            .lookahead
             .clone()
             .expect(format!("Unexpected end of input, expected {:?}", ttype).as_str()); // FIXME: shouldn't require clone here?
 
