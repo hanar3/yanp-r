@@ -279,9 +279,7 @@ impl Parser {
     pub fn additive_expression(&mut self) -> Expression {
         let mut left = self.primary_expression();
 
-        while (self.lookahead.as_ref().unwrap().ttype.to_string()
-            == TokenType::AdditiveOp.to_string())
-        {
+        while (self.lookahead().ttype.to_string() == TokenType::AdditiveOp.to_string()) {
             let operator = self.eat(TokenType::AdditiveOp);
             let right = self.additive_expression();
             left = Expression::Binary(BinaryExpr {
