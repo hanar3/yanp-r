@@ -533,7 +533,7 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":2}}}]}"
 
         );
     }
