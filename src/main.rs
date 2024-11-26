@@ -16,6 +16,7 @@ enum TokenType {
     CloseParen,
     Skip,
     AdditiveOp,
+    MultiplicativeOp,
 }
 
 impl fmt::Display for TokenType {
@@ -37,7 +38,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 12] = [
+    const SPEC: [(&'static str, TokenType); 13] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -56,6 +57,7 @@ impl Tokenizer {
         (r"^\)", TokenType::CloseParen),
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
+        (r"^[*\/]", TokenType::MultiplicativeOp),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -248,13 +250,7 @@ impl Parser {
         return self.lookahead.as_ref().expect("Unexpected end of input");
     }
 
-    /*
-     * Expression
-     *   : Literal
-     *   ;
-     * */
     pub fn expression(&mut self) -> Expression {
-        let la = self.lookahead.clone().unwrap(); // TODO: should not clone!
         self.additive_expression()
     }
 
@@ -276,12 +272,29 @@ impl Parser {
         }
     }
 
-    pub fn additive_expression(&mut self) -> Expression {
+    pub fn multiplicative_expression(&mut self) -> Expression {
         let mut left = self.primary_expression();
+
+        while (self.lookahead().ttype.to_string() == TokenType::MultiplicativeOp.to_string()) {
+            let operator = self.eat(TokenType::MultiplicativeOp);
+            let right = self.additive_expression();
+            left = Expression::Binary(BinaryExpr {
+                _type: "BinaryExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        return left;
+    }
+
+    pub fn additive_expression(&mut self) -> Expression {
+        let mut left = self.multiplicative_expression();
 
         while (self.lookahead().ttype.to_string() == TokenType::AdditiveOp.to_string()) {
             let operator = self.eat(TokenType::AdditiveOp);
-            let right = self.additive_expression();
+            let right = self.multiplicative_expression();
             left = Expression::Binary(BinaryExpr {
                 _type: "BinaryExpression".into(),
                 operator: operator.value,
@@ -325,7 +338,7 @@ impl Parser {
 
     pub fn eat(&mut self, ttype: TokenType) -> Token {
         let lookahead = self
-            .lookahead
+            .lookahead()
             .clone()
             .expect(format!("Unexpected end of input, expected {:?}", ttype).as_str()); // FIXME: shouldn't require clone here?
 
@@ -478,7 +491,8 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
+
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
 
         );
     }
@@ -510,6 +524,35 @@ mod tests {
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
 
+        );
+    }
+    #[test]
+    fn parses_a_multiplicative_expression() {
+        let mut parser = Parser::init(
+            r#"
+                3 * 2;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
+
+        );
+    }
+    #[test]
+    fn parses_a_chained_multiplication_with_correct_operator_precedence() {
+        let mut parser = Parser::init(
+            r#"
+                3 + 2 * 3;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
         );
     }
 }
