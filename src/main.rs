@@ -313,13 +313,9 @@ impl Parser {
         return expr;
     }
 
-    // TODO: there's a better way to do this...
     pub fn literal(&mut self) -> Literal {
-        let la = self
-            .lookahead
-            .clone()
-            .expect("Unexpected end of input while trying to parse literal");
-        match la.ttype {
+        let la = self.lookahead();
+        match self.lookahead().ttype {
             TokenType::Number => self.numeric_literal(),
             TokenType::String => self.string_literal(),
             _ => panic!("Unexpected token: {:?}", la.ttype),
