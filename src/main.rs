@@ -12,6 +12,8 @@ enum TokenType {
     Semicolon,
     OpenCurly,
     CloseCurly,
+    OpenParen,
+    CloseParen,
     Skip,
     AdditiveOp,
 }
@@ -35,7 +37,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 10] = [
+    const SPEC: [(&'static str, TokenType); 12] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -50,6 +52,8 @@ impl Tokenizer {
         (r"^;", TokenType::Semicolon),
         (r"^\{", TokenType::OpenCurly),
         (r"^\}", TokenType::CloseCurly),
+        (r"^\(", TokenType::OpenParen),
+        (r"^\)", TokenType::CloseParen),
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
     ];
@@ -116,11 +120,11 @@ struct BinaryExpr {
     #[serde(rename = "type")]
     _type: String,
     operator: String,
-    left: BinaryExpressionNode,
-    right: BinaryExpressionNode,
+    left: Box<Expression>,
+    right: Box<Expression>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 enum Expression {
     Literal(Literal),
@@ -240,6 +244,10 @@ impl Parser {
         }
     }
 
+    pub fn lookahead(&self) -> &Token {
+        return self.lookahead.as_ref().expect("Unexpected end of input");
+    }
+
     /*
      * Expression
      *   : Literal
@@ -250,35 +258,47 @@ impl Parser {
         self.additive_expression()
     }
 
+    pub fn is_literal(&self, token_type: String) -> bool {
+        return token_type == TokenType::Number.to_string()
+            || token_type == TokenType::String.to_string();
+    }
+
+    pub fn primary_expression(&mut self) -> Expression {
+        let lookahead = self.lookahead();
+        if self.is_literal(lookahead.ttype.to_string()) {
+            return Expression::Literal(self.literal());
+        }
+
+        match lookahead.ttype {
+            TokenType::String | TokenType::Number => Expression::Literal(self.literal()),
+            TokenType::OpenParen => self.parse_parenthesized_expression(),
+            _ => panic!("Unhandled primary expression {:?}", lookahead),
+        }
+    }
+
     pub fn additive_expression(&mut self) -> Expression {
-        let mut left = self.literal();
-        let mut expr: Expression = Expression::Literal(left.clone());
+        let mut left = self.primary_expression();
 
         while (self.lookahead.as_ref().unwrap().ttype.to_string()
             == TokenType::AdditiveOp.to_string())
         {
             let operator = self.eat(TokenType::AdditiveOp);
             let right = self.additive_expression();
-            match right {
-                Expression::Binary(right_expr) => {
-                    expr = Expression::Binary(BinaryExpr {
-                        _type: "BinaryExpression".into(),
-                        operator: "+".into(),
-                        left: BinaryExpressionNode::Literal(left.clone()),
-                        right: BinaryExpressionNode::Binary(Box::new(right_expr)),
-                    });
-                }
-                Expression::Literal(lit) => {
-                    expr = Expression::Binary(BinaryExpr {
-                        _type: "BinaryExpression".into(),
-                        operator: "+".into(),
-                        left: BinaryExpressionNode::Literal(left.clone()),
-                        right: BinaryExpressionNode::Literal(lit),
-                    });
-                }
-            };
+            left = Expression::Binary(BinaryExpr {
+                _type: "BinaryExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
         }
 
+        return left;
+    }
+
+    pub fn parse_parenthesized_expression(&mut self) -> Expression {
+        self.eat(TokenType::OpenParen);
+        let expr = self.expression();
+        self.eat(TokenType::CloseParen);
         return expr;
     }
 
@@ -446,7 +466,51 @@ mod tests {
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
             ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":42},\"right\":{\"type\":\"NumericLiteral\",\"value\":41}}}]}"
+        );
+    }
+    #[test]
+    fn parses_a_chained_binary_expression() {
+        let mut parser = Parser::init(
+            r#"
+                2 + 3 - 1;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
+
+        );
+    }
+    #[test]
+    fn parses_a_parenthesized_binary_expression() {
+        let mut parser = Parser::init(
+            r#"
+                2 + (3 - 1);
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
+
+        );
+    }
+    #[test]
+    fn parses_a_parenthesized_binary_expression_2() {
+        let mut parser = Parser::init(
+            r#"
+                (2 + 3) - 1;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
 
         );
     }
