@@ -464,7 +464,7 @@ impl Parser {
 
         while (self.lookahead().ttype.to_string() == TokenType::LogicalAnd.to_string()) {
             let operator = self.eat(TokenType::LogicalAnd);
-            let right = self.multiplicative_expression();
+            let right = self.equality_expression();
             left = Expression::Logical(LogicalExpr {
                 _type: "LogicalExpression".into(),
                 operator: operator.value,
@@ -481,7 +481,7 @@ impl Parser {
 
         while (self.lookahead().ttype.to_string() == TokenType::LogicalOr.to_string()) {
             let operator = self.eat(TokenType::LogicalOr);
-            let right = self.multiplicative_expression();
+            let right = self.logical_and_expression();
             left = Expression::Logical(LogicalExpr {
                 _type: "LogicalExpression".into(),
                 operator: operator.value,
@@ -498,7 +498,7 @@ impl Parser {
 
         while (self.lookahead().ttype.to_string() == TokenType::EqualityOp.to_string()) {
             let operator = self.eat(TokenType::EqualityOp);
-            let right = self.multiplicative_expression();
+            let right = self.relational_expression();
             left = Expression::Binary(BinaryExpr {
                 _type: "BinaryExpression".into(),
                 operator: operator.value,
@@ -514,7 +514,7 @@ impl Parser {
 
         while (self.lookahead().ttype.to_string() == TokenType::RelationalOp.to_string()) {
             let operator = self.eat(TokenType::RelationalOp);
-            let right = self.multiplicative_expression();
+            let right = self.additive_expression();
             left = Expression::Binary(BinaryExpr {
                 _type: "BinaryExpression".into(),
                 operator: operator.value,
@@ -572,7 +572,7 @@ impl Parser {
 
         while (self.lookahead().ttype.to_string() == TokenType::MultiplicativeOp.to_string()) {
             let operator = self.eat(TokenType::MultiplicativeOp);
-            let right = self.additive_expression();
+            let right = self.primary_expression();
             left = Expression::Binary(BinaryExpr {
                 _type: "BinaryExpression".into(),
                 operator: operator.value,
@@ -1098,6 +1098,28 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"!=\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":5}},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"right\":{\"type\":\"NilLiteral\",\"value\":null}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_logical() {
+        let mut parser = Parser::init(r#"x && y;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"LogicalExpression\",\"operator\":\"&&\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"Identifier\",\"name\":\"y\"}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_logical_with_binary() {
+        let mut parser = Parser::init(r#"x > 0 && y < 1;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"LogicalExpression\",\"operator\":\"&&\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"Identifier\",\"name\":\"y\"}}}]}"
         );
     }
 }
