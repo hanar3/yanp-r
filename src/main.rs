@@ -329,7 +329,7 @@ impl Parser {
         let consequent = self.statement();
 
         let alternate: Option<Statement> = if let Some(ref lookahead) = self.lookahead {
-            if lookahead.ttype.to_string() == TokenType::Else.to_string() {
+            if lookahead.ttype == TokenType::Else {
                 self.eat(TokenType::Else);
                 Some(self.statement())
             } else {
@@ -363,7 +363,7 @@ impl Parser {
         loop {
             declarations.push(self.variable_declaration());
 
-            if self.lookahead().ttype.to_string() != TokenType::Comma.to_string() {
+            if self.lookahead().ttype != TokenType::Comma {
                 break;
             }
 
@@ -375,8 +375,8 @@ impl Parser {
     pub fn variable_declaration(&mut self) -> VariableDeclarator {
         let id = self.identifier();
 
-        let init = if self.lookahead().ttype.to_string() != TokenType::Comma.to_string()
-            && self.lookahead().ttype.to_string() != TokenType::Semicolon.to_string()
+        let init = if self.lookahead().ttype != TokenType::Comma
+            && self.lookahead().ttype != TokenType::Semicolon
         {
             Some(self.variable_initializer())
         } else {
@@ -473,7 +473,7 @@ impl Parser {
     pub fn logical_and_expression(&mut self) -> Expression {
         let mut left = self.equality_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::LogicalAnd.to_string()) {
+        while (self.lookahead().ttype == TokenType::LogicalAnd) {
             let operator = self.eat(TokenType::LogicalAnd);
             let right = self.equality_expression();
             left = Expression::Logical(LogicalExpr {
@@ -490,7 +490,7 @@ impl Parser {
     pub fn logical_or_expression(&mut self) -> Expression {
         let mut left = self.logical_and_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::LogicalOr.to_string()) {
+        while (self.lookahead().ttype == TokenType::LogicalOr) {
             let operator = self.eat(TokenType::LogicalOr);
             let right = self.logical_and_expression();
             left = Expression::Logical(LogicalExpr {
@@ -507,7 +507,7 @@ impl Parser {
     pub fn equality_expression(&mut self) -> Expression {
         let mut left = self.relational_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::EqualityOp.to_string()) {
+        while (self.lookahead().ttype == TokenType::EqualityOp) {
             let operator = self.eat(TokenType::EqualityOp);
             let right = self.relational_expression();
             left = Expression::Binary(BinaryExpr {
@@ -523,7 +523,7 @@ impl Parser {
     pub fn relational_expression(&mut self) -> Expression {
         let mut left = self.additive_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::RelationalOp.to_string()) {
+        while (self.lookahead().ttype == TokenType::RelationalOp) {
             let operator = self.eat(TokenType::RelationalOp);
             let right = self.additive_expression();
             left = Expression::Binary(BinaryExpr {
@@ -546,12 +546,12 @@ impl Parser {
         }
     }
 
-    pub fn is_literal(&self, token_type: String) -> bool {
-        return token_type == TokenType::Number.to_string()
-            || token_type == TokenType::String.to_string()
-            || token_type == TokenType::True.to_string()
-            || token_type == TokenType::False.to_string()
-            || token_type == TokenType::Nil.to_string();
+    pub fn is_literal(&self, token_type: TokenType) -> bool {
+        return token_type == TokenType::Number
+            || token_type == TokenType::String
+            || token_type == TokenType::True
+            || token_type == TokenType::False
+            || token_type == TokenType::Nil;
     }
 
     pub fn unary_expression(&mut self) -> Expression {
@@ -575,7 +575,7 @@ impl Parser {
 
     pub fn primary_expression(&mut self) -> Expression {
         let lookahead = self.lookahead();
-        if self.is_literal(lookahead.ttype.to_string()) {
+        if self.is_literal(lookahead.ttype.clone()) {
             return Expression::Literal(self.literal());
         }
 
@@ -601,7 +601,7 @@ impl Parser {
     pub fn multiplicative_expression(&mut self) -> Expression {
         let mut left = self.unary_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::MultiplicativeOp.to_string()) {
+        while (self.lookahead().ttype == TokenType::MultiplicativeOp) {
             let operator = self.eat(TokenType::MultiplicativeOp);
             let right = self.unary_expression();
             left = Expression::Binary(BinaryExpr {
@@ -618,7 +618,7 @@ impl Parser {
     pub fn additive_expression(&mut self) -> Expression {
         let mut left = self.multiplicative_expression();
 
-        while (self.lookahead().ttype.to_string() == TokenType::AdditiveOp.to_string()) {
+        while (self.lookahead().ttype == TokenType::AdditiveOp) {
             let operator = self.eat(TokenType::AdditiveOp);
             let right = self.multiplicative_expression();
             left = Expression::Binary(BinaryExpr {
