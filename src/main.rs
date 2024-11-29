@@ -23,6 +23,15 @@ enum TokenType {
     ComplexAssign,
     Comma,
     Let,
+    If,
+    Else,
+    RelationalOp,
+    EqualityOp,
+    True,
+    False,
+    Nil,
+    LogicalAnd,
+    LogicalOr,
 }
 
 impl fmt::Display for TokenType {
@@ -44,7 +53,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 18] = [
+    const SPEC: [(&'static str, TokenType); 27] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -64,12 +73,23 @@ impl Tokenizer {
         (r"^\,", TokenType::Comma),
         // Keywords
         (r"^\blet\b", TokenType::Let),
+        (r"^\bif\b", TokenType::If),
+        (r"^\belse\b", TokenType::Else),
+        (r"^\btrue\b", TokenType::True),
+        (r"^\bfalse\b", TokenType::False),
+        (r"^\bnil\b", TokenType::Nil),
+        // Equality operators
+        (r"^[=!]=", TokenType::EqualityOp),
         // Assignment Operators
         (r"^=", TokenType::SimpleAssign),
         (r"^[\*\/\+\-]=", TokenType::ComplexAssign),
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
         (r"^[*\/]", TokenType::MultiplicativeOp),
+        (r"^[><]=?", TokenType::RelationalOp),
+        // Logical Operator
+        (r"^&&?", TokenType::LogicalAnd),
+        (r"^\|\|", TokenType::LogicalOr),
         // Identifier
         (r"^\w+", TokenType::Identifier),
     ];
@@ -122,6 +142,12 @@ enum Literal {
 
     #[serde(rename = "NumericLiteral")]
     Number(i32),
+
+    #[serde(rename = "BooleanLiteral")]
+    Boolean(bool),
+
+    #[serde(rename = "NilLiteral")]
+    Nil(()),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -148,6 +174,15 @@ struct BinaryExpr {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct LogicalExpr {
+    #[serde(rename = "type")]
+    _type: String,
+    operator: String,
+    left: Box<Expression>,
+    right: Box<Expression>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct AssignmentExpression {
     #[serde(rename = "type")]
     _type: String,
@@ -161,6 +196,7 @@ struct AssignmentExpression {
 enum Expression {
     Literal(Literal),
     Binary(BinaryExpr),
+    Logical(LogicalExpr),
     AssignmentExpression(AssignmentExpression),
     LeftHandSideExpression(Identifier),
 }
@@ -193,6 +229,16 @@ enum Statement {
     Expression(ExpressionStatement),
     Block(BlockStatement),
     VariableDecl(VariableDeclarationStatement),
+    If(Box<IfStatement>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IfStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    test: Expression,
+    consequent: Statement,
+    alternate: Option<Statement>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -254,10 +300,39 @@ impl Parser {
             match tok.ttype {
                 TokenType::OpenCurly => Statement::Block(self.block_statement()),
                 TokenType::Let => Statement::VariableDecl(self.variable_declaration_statement()),
+                TokenType::If => Statement::If(Box::new(self.if_statement())),
                 _ => Statement::Expression(self.expression_statement()),
             }
         } else {
             panic!("Unexpected end of input parsing statement");
+        }
+    }
+
+    pub fn if_statement(&mut self) -> IfStatement {
+        let lookahead = self.lookahead.clone();
+        self.eat(TokenType::If);
+        self.eat(TokenType::OpenParen);
+        let test = self.expression();
+        self.eat(TokenType::CloseParen);
+
+        let consequent = self.statement();
+
+        let alternate: Option<Statement> = if let Some(ref lookahead) = self.lookahead {
+            if lookahead.ttype.to_string() == TokenType::Else.to_string() {
+                self.eat(TokenType::Else);
+                Some(self.statement())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        IfStatement {
+            _type: "IfStatement".into(),
+            test,
+            consequent,
+            alternate,
         }
     }
 
@@ -366,7 +441,7 @@ impl Parser {
     }
 
     pub fn assignment_expression(&mut self) -> Expression {
-        let left = self.additive_expression();
+        let left = self.logical_or_expression();
 
         if !self.is_assignment_operator(&self.lookahead().clone()) {
             return left;
@@ -384,6 +459,73 @@ impl Parser {
         });
     }
 
+    pub fn logical_and_expression(&mut self) -> Expression {
+        let mut left = self.equality_expression();
+
+        while (self.lookahead().ttype.to_string() == TokenType::LogicalAnd.to_string()) {
+            let operator = self.eat(TokenType::LogicalAnd);
+            let right = self.multiplicative_expression();
+            left = Expression::Logical(LogicalExpr {
+                _type: "LogicalExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        return left;
+    }
+
+    pub fn logical_or_expression(&mut self) -> Expression {
+        let mut left = self.logical_and_expression();
+
+        while (self.lookahead().ttype.to_string() == TokenType::LogicalOr.to_string()) {
+            let operator = self.eat(TokenType::LogicalOr);
+            let right = self.multiplicative_expression();
+            left = Expression::Logical(LogicalExpr {
+                _type: "LogicalExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        return left;
+    }
+
+    pub fn equality_expression(&mut self) -> Expression {
+        let mut left = self.relational_expression();
+
+        while (self.lookahead().ttype.to_string() == TokenType::EqualityOp.to_string()) {
+            let operator = self.eat(TokenType::EqualityOp);
+            let right = self.multiplicative_expression();
+            left = Expression::Binary(BinaryExpr {
+                _type: "BinaryExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        return left;
+    }
+    pub fn relational_expression(&mut self) -> Expression {
+        let mut left = self.additive_expression();
+
+        while (self.lookahead().ttype.to_string() == TokenType::RelationalOp.to_string()) {
+            let operator = self.eat(TokenType::RelationalOp);
+            let right = self.multiplicative_expression();
+            left = Expression::Binary(BinaryExpr {
+                _type: "BinaryExpression".into(),
+                operator: operator.value,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        return left;
+    }
+
     pub fn assignment_operator(&mut self) -> Token {
         let lookahead = self.lookahead();
         match lookahead.ttype {
@@ -395,7 +537,10 @@ impl Parser {
 
     pub fn is_literal(&self, token_type: String) -> bool {
         return token_type == TokenType::Number.to_string()
-            || token_type == TokenType::String.to_string();
+            || token_type == TokenType::String.to_string()
+            || token_type == TokenType::True.to_string()
+            || token_type == TokenType::False.to_string()
+            || token_type == TokenType::Nil.to_string();
     }
 
     pub fn primary_expression(&mut self) -> Expression {
@@ -468,6 +613,8 @@ impl Parser {
         match self.lookahead().ttype {
             TokenType::Number => self.numeric_literal(),
             TokenType::String => self.string_literal(),
+            TokenType::True | TokenType::False => self.boolean_literal(),
+            TokenType::Nil => self.nil_literal(),
             _ => panic!("Unexpected token: {:?}", la.ttype),
         }
     }
@@ -480,6 +627,32 @@ impl Parser {
     pub fn string_literal(&mut self) -> Literal {
         let tok = self.eat(TokenType::String);
         return Literal::String(tok.value[1..tok.value.len() - 1].to_string());
+    }
+
+    pub fn nil_literal(&mut self) -> Literal {
+        let token = self.eat(TokenType::Nil);
+        return Literal::Nil(());
+    }
+
+    pub fn boolean_literal(&mut self) -> Literal {
+        let lookahead = self.lookahead.clone();
+        let literal = if let Some(ref lookahead_token) = lookahead {
+            match lookahead_token.ttype {
+                TokenType::True => {
+                    self.eat(TokenType::True);
+                    Literal::Boolean(true)
+                }
+                TokenType::False => {
+                    self.eat(TokenType::False);
+                    Literal::Boolean(lookahead_token.value.eq("true"))
+                }
+                _ => panic!("Expected BooleanLiteral, instead found {:?}", lookahead),
+            }
+        } else {
+            panic!("Expected BooleanLiteral, instead found end of input");
+        };
+
+        return literal;
     }
 
     pub fn eat(&mut self, ttype: TokenType) -> Token {
@@ -514,9 +687,9 @@ mod tests {
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}}]}"
+            );
     }
 
     #[test]
@@ -525,9 +698,9 @@ mod tests {
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}"
+            );
     }
 
     #[test]
@@ -536,9 +709,9 @@ mod tests {
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
+            );
     }
 
     #[test]
@@ -547,221 +720,221 @@ mod tests {
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello-single\"}}]}"
+            );
     }
     #[test]
     fn parses_block_statement() {
         let mut parser = Parser::init(
             r#"
-            {
-                42;
-                "hello";
-            }
-        "#,
+                {
+                    42;
+                    "hello";
+                }
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
 
-        );
+            );
     }
     #[test]
     fn skips_single_line_comments() {
         let mut parser = Parser::init(
             r#"
-            // Hello world!
-            {
-                42;
-                "hello";
-            }
-        "#,
+                // Hello world!
+                {
+                    42;
+                    "hello";
+                }
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
 
-        );
+            );
     }
 
     #[test]
     fn skips_multiline_comments() {
         let mut parser = Parser::init(
             r#"
-            /*
-             * Hello
-             * This is a doc
-             * 
-             * */
-            {
-                42;
-                "hello";
-            }
-        "#,
+                /*
+                 * Hello
+                 * This is a doc
+                 * 
+                 * */
+                {
+                    42;
+                    "hello";
+                }
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"NumericLiteral\",\"value\":42}},{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"StringLiteral\",\"value\":\"hello\"}}]}]}"
 
-        );
+            );
     }
     #[test]
     fn parses_a_simple_sum_expression() {
         let mut parser = Parser::init(
             r#"
-                42 + 41;
-        "#,
+                    42 + 41;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":42},\"right\":{\"type\":\"NumericLiteral\",\"value\":41}}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":42},\"right\":{\"type\":\"NumericLiteral\",\"value\":41}}}]}"
+            );
     }
     #[test]
     fn parses_a_chained_binary_expression() {
         let mut parser = Parser::init(
             r#"
-                2 + 3 - 1;
-        "#,
+                    2 + 3 - 1;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
+                ast,
 
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
 
-        );
+            );
     }
     #[test]
     fn parses_a_parenthesized_binary_expression() {
         let mut parser = Parser::init(
             r#"
-                2 + (3 - 1);
-        "#,
+                    2 + (3 - 1);
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
+                ast,
+                 "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
 
-        );
+            );
     }
     #[test]
     fn parses_a_parenthesized_binary_expression_2() {
         let mut parser = Parser::init(
             r#"
-                (2 + 3) - 1;
-        "#,
+                    (2 + 3) - 1;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"-\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}"
 
-        );
+            );
     }
     #[test]
     fn parses_a_multiplicative_expression() {
         let mut parser = Parser::init(
             r#"
-                3 * 2;
-        "#,
+                    3 * 2;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":2}}}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"NumericLiteral\",\"value\":2}}}]}"
 
-        );
+            );
     }
     #[test]
     fn parses_a_chained_multiplication_with_correct_operator_precedence() {
         let mut parser = Parser::init(
             r#"
-                3 + 2 * 3;
-        "#,
+                    3 + 2 * 3;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
-        );
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"NumericLiteral\",\"value\":3},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"*\",\"left\":{\"type\":\"NumericLiteral\",\"value\":2},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+            );
     }
 
     #[test]
     fn parses_an_assignment() {
         let mut parser = Parser::init(
             r#"
-                x = 3;
-        "#,
+                    x = 3;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}]}"
 
-        );
+            );
     }
 
     #[test]
     fn parses_chained_variable_assignment() {
         let mut parser = Parser::init(
             r#"
-                x = y = 3;
-        "#,
+                    x = y = 3;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
 
-        );
+            );
     }
 
     #[test]
     pub fn parses_variable_assignment_with_binary_expressions() {
         let mut parser = Parser::init(
             r#"
-                x = y + 3;
-        "#,
+                    x = y + 3;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":3}}}}]}"
 
-        );
+            );
     }
 
     #[test]
     pub fn parses_variable_declaration() {
         let mut parser = Parser::init(
             r#"
-                let x;
-        "#,
+                    let x;
+            "#,
         );
         let ast = parser.parse();
         let ast = serde_json::to_string(&ast).unwrap();
         assert_eq!(
-            ast,
-            "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"x\"},\"init\":null}]}]}"
+                ast,
+                "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"x\"},\"init\":null}]}]}"
 
         );
     }
@@ -824,6 +997,107 @@ mod tests {
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":42}}}]}"
 
+        );
+    }
+
+    #[test]
+    pub fn parses_ifelse_statement() {
+        let mut parser = Parser::init(
+            r#"
+            if (x) {
+                x = 1;
+            } else {
+                x = 2;
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"IfStatement\",\"test\":{\"type\":\"Identifier\",\"name\":\"x\"},\"consequent\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]},\"alternate\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":2}}}]}}]}"
+
+        );
+    }
+    #[test]
+    // no else
+    pub fn parses_if_statement() {
+        let mut parser = Parser::init(
+            r#"
+            if (x) {
+                x = 1;
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"IfStatement\",\"test\":{\"type\":\"Identifier\",\"name\":\"x\"},\"consequent\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]},\"alternate\":null}]}"
+        );
+    }
+
+    #[test]
+    // no else
+    pub fn parses_relational_op_gt() {
+        let mut parser = Parser::init(r#"x > 10;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}}}]}"
+        );
+    }
+
+    #[test]
+    // no else
+    pub fn parses_relational_op_lt() {
+        let mut parser = Parser::init(r#"x < 10;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"<\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_ifelse_with_relational_op() {
+        let mut parser = Parser::init(
+            r#"
+            if (x > 10) {
+                x = 1;
+            } else {
+                x = 2;
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"IfStatement\",\"test\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"consequent\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]},\"alternate\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":2}}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_equality_op() {
+        let mut parser = Parser::init(r#"x + 5 > 10 == true;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"==\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":5}},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"right\":{\"type\":\"BooleanLiteral\",\"value\":true}}}]}"
+        );
+    }
+    #[test]
+    pub fn parses_neq() {
+        let mut parser = Parser::init(r#"x + 5 > 10 != nil;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"BinaryExpression\",\"operator\":\"!=\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":5}},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"right\":{\"type\":\"NilLiteral\",\"value\":null}}}]}"
         );
     }
 }
