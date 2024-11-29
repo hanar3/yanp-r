@@ -20,6 +20,7 @@ enum TokenType {
     MultiplicativeOp,
     Identifier,
     SimpleAssign,
+    ComplexAssign,
     Comma,
     Let,
 }
@@ -43,7 +44,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 17] = [
+    const SPEC: [(&'static str, TokenType); 18] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -63,13 +64,14 @@ impl Tokenizer {
         (r"^\,", TokenType::Comma),
         // Keywords
         (r"^\blet\b", TokenType::Let),
+        // Assignment Operators
+        (r"^=", TokenType::SimpleAssign),
+        (r"^[\*\/\+\-]=", TokenType::ComplexAssign),
         // Math operators
         (r"^[+\-]", TokenType::AdditiveOp),
         (r"^[*\/]", TokenType::MultiplicativeOp),
         // Identifier
         (r"^\w+", TokenType::Identifier),
-        // Assignment Operators
-        (r"^=", TokenType::SimpleAssign),
     ];
     pub fn new(str: &'static str) -> Self {
         Self { str, cursor: 0 }
@@ -351,7 +353,7 @@ impl Parser {
 
     pub fn is_assignment_operator(&mut self, lookahead: &Token) -> bool {
         match lookahead.ttype {
-            TokenType::SimpleAssign => true,
+            TokenType::SimpleAssign | TokenType::ComplexAssign => true,
             _ => false,
         }
     }
@@ -383,7 +385,12 @@ impl Parser {
     }
 
     pub fn assignment_operator(&mut self) -> Token {
-        return self.eat(TokenType::SimpleAssign);
+        let lookahead = self.lookahead();
+        match lookahead.ttype {
+            TokenType::SimpleAssign => self.eat(TokenType::SimpleAssign),
+            TokenType::ComplexAssign => self.eat(TokenType::ComplexAssign),
+            _ => panic!("Expected assignment operator, instead got {:?}", lookahead),
+        }
     }
 
     pub fn is_literal(&self, token_type: String) -> bool {
@@ -801,6 +808,21 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"init\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"Identifier\",\"name\":\"bar\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}}}]}]}"
+
+        );
+    }
+    #[test]
+    pub fn parses_complex_assignment() {
+        let mut parser = Parser::init(
+            r#"
+             x += 42;
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":42}}}]}"
 
         );
     }
