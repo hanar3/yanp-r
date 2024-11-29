@@ -32,6 +32,7 @@ enum TokenType {
     Nil,
     LogicalAnd,
     LogicalOr,
+    LogicalNot,
 }
 
 impl fmt::Display for TokenType {
@@ -53,7 +54,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 27] = [
+    const SPEC: [(&'static str, TokenType); 28] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -90,6 +91,7 @@ impl Tokenizer {
         // Logical Operator
         (r"^&&?", TokenType::LogicalAnd),
         (r"^\|\|", TokenType::LogicalOr),
+        (r"^!", TokenType::LogicalNot),
         // Identifier
         (r"^\w+", TokenType::Identifier),
     ];
@@ -183,6 +185,14 @@ struct LogicalExpr {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct UnaryExpr {
+    #[serde(rename = "type")]
+    _type: String,
+    operator: String,
+    argument: Box<Expression>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct AssignmentExpression {
     #[serde(rename = "type")]
     _type: String,
@@ -195,6 +205,7 @@ struct AssignmentExpression {
 #[serde(untagged)]
 enum Expression {
     Literal(Literal),
+    Unary(UnaryExpr),
     Binary(BinaryExpr),
     Logical(LogicalExpr),
     AssignmentExpression(AssignmentExpression),
@@ -543,6 +554,25 @@ impl Parser {
             || token_type == TokenType::Nil.to_string();
     }
 
+    pub fn unary_expression(&mut self) -> Expression {
+        let lookahead = self.lookahead();
+        let operator = match lookahead.ttype {
+            TokenType::AdditiveOp => Some(self.eat(TokenType::AdditiveOp).value),
+            TokenType::LogicalNot => Some(self.eat(TokenType::LogicalNot).value),
+            _ => None,
+        };
+
+        if let Some(ref op) = operator {
+            return Expression::Unary(UnaryExpr {
+                _type: "UnaryExpression".into(),
+                operator: op.to_string(),
+                argument: Box::new(self.unary_expression()),
+            });
+        }
+
+        return self.left_hand_side_expression();
+    }
+
     pub fn primary_expression(&mut self) -> Expression {
         let lookahead = self.lookahead();
         if self.is_literal(lookahead.ttype.to_string()) {
@@ -552,12 +582,13 @@ impl Parser {
         match lookahead.ttype {
             TokenType::String | TokenType::Number => Expression::Literal(self.literal()),
             TokenType::OpenParen => self.parse_parenthesized_expression(),
+            TokenType::Identifier => Expression::LeftHandSideExpression(self.identifier()),
             _ => self.left_hand_side_expression(),
         }
     }
 
     pub fn left_hand_side_expression(&mut self) -> Expression {
-        return Expression::LeftHandSideExpression(self.identifier());
+        return self.primary_expression();
     }
 
     pub fn identifier(&mut self) -> Identifier {
@@ -568,11 +599,11 @@ impl Parser {
     }
 
     pub fn multiplicative_expression(&mut self) -> Expression {
-        let mut left = self.primary_expression();
+        let mut left = self.unary_expression();
 
         while (self.lookahead().ttype.to_string() == TokenType::MultiplicativeOp.to_string()) {
             let operator = self.eat(TokenType::MultiplicativeOp);
-            let right = self.primary_expression();
+            let right = self.unary_expression();
             left = Expression::Binary(BinaryExpr {
                 _type: "BinaryExpression".into(),
                 operator: operator.value,
@@ -1132,6 +1163,30 @@ mod tests {
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"LogicalExpression\",\"operator\":\"||\",\"left\":{\"type\":\"BinaryExpression\",\"operator\":\">\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":0}},\"right\":{\"type\":\"BinaryExpression\",\"operator\":\"<\",\"left\":{\"type\":\"Identifier\",\"name\":\"y\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}}]}"
 
+        );
+    }
+
+    #[test]
+    pub fn parses_basic_unary_expression() {
+        let mut parser = Parser::init(r#"-x;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"UnaryExpression\",\"operator\":\"-\",\"argument\":{\"type\":\"Identifier\",\"name\":\"x\"}}}]}"
+
+        );
+    }
+
+    #[test]
+    pub fn parses_chained_unary_expression() {
+        let mut parser = Parser::init(r#"-!x;"#);
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"UnaryExpression\",\"operator\":\"-\",\"argument\":{\"type\":\"UnaryExpression\",\"operator\":\"!\",\"argument\":{\"type\":\"Identifier\",\"name\":\"x\"}}}}]}"
         );
     }
 }
