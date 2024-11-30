@@ -33,6 +33,9 @@ enum TokenType {
     LogicalAnd,
     LogicalOr,
     LogicalNot,
+    While,
+    Do,
+    For,
 }
 
 impl fmt::Display for TokenType {
@@ -54,7 +57,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 28] = [
+    const SPEC: [(&'static str, TokenType); 31] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -79,6 +82,9 @@ impl Tokenizer {
         (r"^\btrue\b", TokenType::True),
         (r"^\bfalse\b", TokenType::False),
         (r"^\bnil\b", TokenType::Nil),
+        (r"^\bwhile\b", TokenType::While),
+        (r"^\bdo\b", TokenType::Do),
+        (r"^\bfor\b", TokenType::For),
         // Equality operators
         (r"^[=!]=", TokenType::EqualityOp),
         // Assignment Operators
@@ -241,6 +247,16 @@ enum Statement {
     Block(BlockStatement),
     VariableDecl(VariableDeclarationStatement),
     If(Box<IfStatement>),
+    While(Box<WhileStatement>),
+    For(Box<ForStatement>),
+    DoWhile(Box<DoWhileStatement>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ForStatementInit {
+    VariableDeclaration(VariableDeclarationStatement),
+    AssignmentExpression(Expression),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -250,6 +266,32 @@ struct IfStatement {
     test: Expression,
     consequent: Statement,
     alternate: Option<Statement>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WhileStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    test: Expression,
+    body: Statement,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DoWhileStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    test: Expression,
+    body: Statement,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ForStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    init: Option<ForStatementInit>,
+    test: Option<Expression>,
+    update: Option<Expression>,
+    body: Statement,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -312,10 +354,94 @@ impl Parser {
                 TokenType::OpenCurly => Statement::Block(self.block_statement()),
                 TokenType::Let => Statement::VariableDecl(self.variable_declaration_statement()),
                 TokenType::If => Statement::If(Box::new(self.if_statement())),
+                TokenType::While | TokenType::Do | TokenType::For => self.iteration_statement(),
                 _ => Statement::Expression(self.expression_statement()),
             }
         } else {
             panic!("Unexpected end of input parsing statement");
+        }
+    }
+
+    pub fn iteration_statement(&mut self) -> Statement {
+        match self.lookahead().ttype {
+            TokenType::While => Statement::While(Box::new(self.while_statement())),
+            TokenType::For => Statement::For(Box::new(self.for_statement())),
+            TokenType::Do => Statement::DoWhile(Box::new(self.do_while_statement())),
+            _ => panic!("Lookahead is not an iteration statement"),
+        }
+    }
+
+    pub fn while_statement(&mut self) -> WhileStatement {
+        self.eat(TokenType::While);
+        self.eat(TokenType::OpenParen);
+        let test = self.expression();
+        self.eat(TokenType::CloseParen);
+        let body = self.statement();
+
+        return WhileStatement {
+            _type: "WhileStatement".to_string(),
+            test,
+            body,
+        };
+    }
+
+    pub fn for_statement(&mut self) -> ForStatement {
+        self.eat(TokenType::For);
+        self.eat(TokenType::OpenParen);
+
+        let init = if self.lookahead().ttype != TokenType::Semicolon {
+            Some(self.for_statement_init())
+        } else {
+            None
+        };
+        self.eat(TokenType::Semicolon);
+
+        let test = if self.lookahead().ttype != TokenType::Semicolon {
+            Some(self.expression())
+        } else {
+            None
+        };
+        self.eat(TokenType::Semicolon);
+
+        let update = if self.lookahead().ttype != TokenType::CloseParen {
+            Some(self.expression())
+        } else {
+            None
+        };
+        self.eat(TokenType::CloseParen);
+
+        let body = self.statement();
+
+        return ForStatement {
+            _type: "ForStatement".into(),
+            init,
+            test,
+            update,
+            body,
+        };
+    }
+
+    pub fn for_statement_init(&mut self) -> ForStatementInit {
+        if self.lookahead().ttype == TokenType::Let {
+            return ForStatementInit::VariableDeclaration(self.variable_statement_init());
+        } else {
+            return ForStatementInit::AssignmentExpression(self.expression());
+        }
+    }
+
+    pub fn do_while_statement(&mut self) -> DoWhileStatement {
+        self.eat(TokenType::Do);
+        let body = self.statement();
+        self.eat(TokenType::While);
+        self.eat(TokenType::OpenParen);
+        let test = self.expression();
+        self.eat(TokenType::CloseParen);
+        self.eat(TokenType::Semicolon);
+
+        DoWhileStatement {
+            _type: "DoWhileStatement".to_string(),
+            test,
+            body,
         }
     }
 
@@ -347,13 +473,16 @@ impl Parser {
         }
     }
 
-    pub fn variable_declaration_statement(&mut self) -> VariableDeclarationStatement {
+    pub fn variable_statement_init(&mut self) -> VariableDeclarationStatement {
         self.eat(TokenType::Let);
-        let statement = VariableDeclarationStatement {
+        return VariableDeclarationStatement {
             _type: "VariableDeclaration".into(),
             declarations: self.variable_declaration_list(),
         };
+    }
 
+    pub fn variable_declaration_statement(&mut self) -> VariableDeclarationStatement {
+        let statement = self.variable_statement_init();
         self.eat(TokenType::Semicolon);
         return statement;
     }
@@ -1187,6 +1316,77 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"UnaryExpression\",\"operator\":\"-\",\"argument\":{\"type\":\"UnaryExpression\",\"operator\":\"!\",\"argument\":{\"type\":\"Identifier\",\"name\":\"x\"}}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_while_statement() {
+        let mut parser = Parser::init(
+            r#"
+            while(x < 10) {
+                x += 1;
+            }
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"WhileStatement\",\"test\":{\"type\":\"BinaryExpression\",\"operator\":\"<\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_do_while_statement() {
+        let mut parser = Parser::init(
+            r#"
+            do {
+                x += 1;
+            } while(x < 10);
+
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"DoWhileStatement\",\"test\":{\"type\":\"BinaryExpression\",\"operator\":\"<\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_for_statement() {
+        let mut parser = Parser::init(
+            r#"
+            for (let i = 0; i < 10; i += 1) {
+                x += 1;
+            }
+
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ForStatement\",\"init\":{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"i\"},\"init\":{\"type\":\"NumericLiteral\",\"value\":0}}]},\"test\":{\"type\":\"BinaryExpression\",\"operator\":\"<\",\"left\":{\"type\":\"Identifier\",\"name\":\"i\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":10}},\"update\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"i\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}},\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_infinite_for_statement() {
+        let mut parser = Parser::init(
+            r#"
+            for (;;) {
+                x += 1;
+            }
+
+        "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ForStatement\",\"init\":null,\"test\":null,\"update\":null,\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}}]}"
         );
     }
 }
