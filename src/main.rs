@@ -38,6 +38,9 @@ enum TokenType {
     For,
     Def,
     Return,
+    Dot,
+    OpenSquareBracket,
+    CloseSquareBracket,
 }
 
 impl fmt::Display for TokenType {
@@ -59,7 +62,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 33] = [
+    const SPEC: [(&'static str, TokenType); 36] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -76,7 +79,10 @@ impl Tokenizer {
         (r"^\}", TokenType::CloseCurly),
         (r"^\(", TokenType::OpenParen),
         (r"^\)", TokenType::CloseParen),
+        (r"^\[", TokenType::OpenSquareBracket),
+        (r"^\]", TokenType::CloseSquareBracket),
         (r"^\,", TokenType::Comma),
+        (r"^\.", TokenType::Dot),
         // Keywords
         (r"^\blet\b", TokenType::Let),
         (r"^\bif\b", TokenType::If),
@@ -211,6 +217,23 @@ struct AssignmentExpression {
     right: Box<Expression>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MemberExpression {
+    #[serde(rename = "type")]
+    _type: String,
+    computed: bool,
+    object: Box<Expression>,
+    property: Box<Expression>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CallExpression {
+    #[serde(rename = "type")]
+    _type: String,
+    callee: Box<Expression>,
+    arguments: Vec<Expression>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 enum Expression {
@@ -220,6 +243,8 @@ enum Expression {
     Logical(LogicalExpr),
     AssignmentExpression(AssignmentExpression),
     LeftHandSideExpression(Identifier),
+    Member(MemberExpression),
+    Call(CallExpression),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -649,7 +674,7 @@ impl Parser {
 
     pub fn is_valid_left(&mut self, left: &Expression) -> bool {
         match left {
-            Expression::LeftHandSideExpression(_) => true,
+            Expression::LeftHandSideExpression(_) | Expression::Member(_) => true,
             _ => false,
         }
     }
@@ -791,7 +816,91 @@ impl Parser {
     }
 
     pub fn left_hand_side_expression(&mut self) -> Expression {
-        return self.primary_expression();
+        return self.call_member_expression();
+    }
+
+    pub fn call_member_expression(&mut self) -> Expression {
+        let member = self.member_expression();
+        if self.lookahead().ttype == TokenType::OpenParen {
+            return self.call_expression(member);
+        }
+
+        return member;
+    }
+
+    fn call_expression(&mut self, member: Expression) -> Expression {
+        let mut call_expr = Expression::Call(CallExpression {
+            _type: "CallExpression".into(),
+            callee: Box::new(member),
+            arguments: self.arguments(),
+        });
+
+        if self.lookahead().ttype == TokenType::OpenParen {
+            call_expr = self.call_expression(call_expr);
+        }
+
+        return call_expr;
+    }
+
+    fn arguments(&mut self) -> Vec<Expression> {
+        self.eat(TokenType::OpenParen);
+        let argument_list = if self.lookahead().ttype == TokenType::CloseParen {
+            vec![]
+        } else {
+            self.argument_list()
+        };
+
+        self.eat(TokenType::CloseParen);
+
+        return argument_list;
+    }
+
+    fn argument_list(&mut self) -> Vec<Expression> {
+        let mut argument_list = vec![];
+        loop {
+            argument_list.push(self.assignment_expression());
+            if self.lookahead().ttype != TokenType::Comma {
+                break;
+            }
+
+            self.eat(TokenType::Comma);
+        }
+
+        return argument_list;
+    }
+    pub fn member_expression(&mut self) -> Expression {
+        let mut object = self.primary_expression();
+        loop {
+            let lookahead = self.lookahead();
+            if lookahead.ttype == TokenType::Dot || lookahead.ttype == TokenType::OpenSquareBracket
+            {
+                if lookahead.ttype == TokenType::Dot {
+                    self.eat(TokenType::Dot);
+                    let property = Expression::LeftHandSideExpression(self.identifier());
+                    object = Expression::Member(MemberExpression {
+                        _type: "MemberExpression".into(),
+                        computed: false,
+                        property: Box::new(property),
+                        object: Box::new(object),
+                    });
+                } else if lookahead.ttype == TokenType::OpenSquareBracket {
+                    self.eat(TokenType::OpenSquareBracket);
+                    let property = self.expression();
+                    self.eat(TokenType::CloseSquareBracket);
+
+                    object = Expression::Member(MemberExpression {
+                        _type: "MemberExpression".into(),
+                        computed: true,
+                        property: Box::new(property),
+                        object: Box::new(object),
+                    });
+                }
+            } else {
+                break;
+            }
+        }
+
+        return object;
     }
 
     pub fn identifier(&mut self) -> Identifier {
@@ -1496,6 +1605,66 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"FunctionDeclaration\",\"name\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"params\":[],\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"bar\"},\"init\":{\"type\":\"NumericLiteral\",\"value\":42}}]},{\"type\":\"ReturnStatement\",\"argument\":{\"type\":\"Identifier\",\"name\":\"bar\"}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_member_non_computed_member_expression_assignment() {
+        let mut parser = Parser::init(
+            r#"
+                foo.length = 0;
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"MemberExpression\",\"computed\":false,\"object\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"property\":{\"type\":\"Identifier\",\"name\":\"length\"}},\"right\":{\"type\":\"NumericLiteral\",\"value\":0}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_computed_member_expression_assignment() {
+        let mut parser = Parser::init(
+            r#"
+                foo[0] = 0;
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"MemberExpression\",\"computed\":true,\"object\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"property\":{\"type\":\"NumericLiteral\",\"value\":0}},\"right\":{\"type\":\"NumericLiteral\",\"value\":0}}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_a_call_expression() {
+        let mut parser = Parser::init(
+            r#"
+                foo(42, 24, 42);
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"CallExpression\",\"callee\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"arguments\":[{\"type\":\"NumericLiteral\",\"value\":42},{\"type\":\"NumericLiteral\",\"value\":24},{\"type\":\"NumericLiteral\",\"value\":42}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_a_member_call_expression() {
+        let mut parser = Parser::init(
+            r#"
+                console.log(x, y);
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"=\",\"left\":{\"type\":\"MemberExpression\",\"computed\":true,\"object\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"property\":{\"type\":\"NumericLiteral\",\"value\":0}},\"right\":{\"type\":\"NumericLiteral\",\"value\":0}}}]}"
         );
     }
 }
