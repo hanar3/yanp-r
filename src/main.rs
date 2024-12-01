@@ -36,6 +36,8 @@ enum TokenType {
     While,
     Do,
     For,
+    Def,
+    Return,
 }
 
 impl fmt::Display for TokenType {
@@ -57,7 +59,7 @@ struct Tokenizer {
 }
 
 impl Tokenizer {
-    const SPEC: [(&'static str, TokenType); 31] = [
+    const SPEC: [(&'static str, TokenType); 33] = [
         // Whitespaces
         (r"^\s+", TokenType::Skip),
         // Numbers:
@@ -85,6 +87,8 @@ impl Tokenizer {
         (r"^\bwhile\b", TokenType::While),
         (r"^\bdo\b", TokenType::Do),
         (r"^\bfor\b", TokenType::For),
+        (r"^\bdef\b", TokenType::Def),
+        (r"^\breturn\b", TokenType::Return),
         // Equality operators
         (r"^[=!]=", TokenType::EqualityOp),
         // Assignment Operators
@@ -232,6 +236,22 @@ struct VariableDeclarationStatement {
     declarations: Vec<VariableDeclarator>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct FunctionDeclarationStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    name: Identifier,
+    params: Vec<Identifier>,
+    body: BlockStatement,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReturnStatement {
+    #[serde(rename = "type")]
+    _type: String,
+    argument: Option<Expression>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct VariableDeclarator {
     #[serde(rename = "type")]
@@ -250,6 +270,8 @@ enum Statement {
     While(Box<WhileStatement>),
     For(Box<ForStatement>),
     DoWhile(Box<DoWhileStatement>),
+    Fn(FunctionDeclarationStatement),
+    Return(ReturnStatement),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +377,8 @@ impl Parser {
                 TokenType::Let => Statement::VariableDecl(self.variable_declaration_statement()),
                 TokenType::If => Statement::If(Box::new(self.if_statement())),
                 TokenType::While | TokenType::Do | TokenType::For => self.iteration_statement(),
+                TokenType::Def => Statement::Fn(self.function_declaration_statement()),
+                TokenType::Return => Statement::Return(self.return_statement()),
                 _ => Statement::Expression(self.expression_statement()),
             }
         } else {
@@ -362,6 +386,56 @@ impl Parser {
         }
     }
 
+    pub fn function_declaration_statement(&mut self) -> FunctionDeclarationStatement {
+        self.eat(TokenType::Def);
+        let name = self.identifier();
+        self.eat(TokenType::OpenParen);
+
+        let params = if self.lookahead().ttype != TokenType::CloseParen {
+            self.formal_parameter_list()
+        } else {
+            vec![]
+        };
+        self.eat(TokenType::CloseParen);
+        let body = self.block_statement();
+
+        return FunctionDeclarationStatement {
+            _type: "FunctionDeclaration".into(),
+            name,
+            params,
+            body,
+        };
+    }
+
+    pub fn return_statement(&mut self) -> ReturnStatement {
+        self.eat(TokenType::Return);
+        let argument = if self.lookahead().ttype == TokenType::Semicolon {
+            None
+        } else {
+            Some(self.expression())
+        };
+
+        self.eat(TokenType::Semicolon);
+
+        return ReturnStatement {
+            _type: "ReturnStatement".into(),
+            argument,
+        };
+    }
+
+    pub fn formal_parameter_list(&mut self) -> Vec<Identifier> {
+        let mut params = vec![];
+        loop {
+            params.push(self.identifier());
+            if self.lookahead().ttype != TokenType::Comma {
+                break;
+            }
+
+            self.eat(TokenType::Comma);
+        }
+
+        return params;
+    }
     pub fn iteration_statement(&mut self) -> Statement {
         match self.lookahead().ttype {
             TokenType::While => Statement::While(Box::new(self.while_statement())),
@@ -929,7 +1003,7 @@ mod tests {
                 /*
                  * Hello
                  * This is a doc
-                 * 
+                 *
                  * */
                 {
                     42;
@@ -1387,6 +1461,41 @@ mod tests {
         assert_eq!(
             ast,
             "{\"type\":\"Program\",\"body\":[{\"type\":\"ForStatement\",\"init\":null,\"test\":null,\"update\":null,\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"ExpressionStatement\",\"expression\":{\"type\":\"AssignmentExpression\",\"operator\":\"+=\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]}}]}"
+        );
+    }
+
+    #[test]
+    pub fn parses_function_declaration() {
+        let mut parser = Parser::init(
+            r#"
+                def foo(x) {
+                    let bar = x + 1;
+                    return bar;
+                }
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"FunctionDeclaration\",\"name\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"params\":[{\"type\":\"Identifier\",\"name\":\"x\"}],\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"bar\"},\"init\":{\"type\":\"BinaryExpression\",\"operator\":\"+\",\"left\":{\"type\":\"Identifier\",\"name\":\"x\"},\"right\":{\"type\":\"NumericLiteral\",\"value\":1}}}]},{\"type\":\"ReturnStatement\",\"argument\":{\"type\":\"Identifier\",\"name\":\"bar\"}}]}}]}"
+        );
+    }
+    #[test]
+    pub fn parses_a_function_with_empty_params() {
+        let mut parser = Parser::init(
+            r#"
+                def foo() {
+                    let bar = 42;
+                    return bar;
+                }
+            "#,
+        );
+        let ast = parser.parse();
+        let ast = serde_json::to_string(&ast).unwrap();
+        assert_eq!(
+            ast,
+            "{\"type\":\"Program\",\"body\":[{\"type\":\"FunctionDeclaration\",\"name\":{\"type\":\"Identifier\",\"name\":\"foo\"},\"params\":[],\"body\":{\"type\":\"BlockStatement\",\"body\":[{\"type\":\"VariableDeclaration\",\"declarations\":[{\"type\":\"VariableDeclarator\",\"id\":{\"type\":\"Identifier\",\"name\":\"bar\"},\"init\":{\"type\":\"NumericLiteral\",\"value\":42}}]},{\"type\":\"ReturnStatement\",\"argument\":{\"type\":\"Identifier\",\"name\":\"bar\"}}]}}]}"
         );
     }
 }
